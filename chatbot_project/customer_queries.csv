@@ -1,0 +1,31 @@
+query,intent
+"How do I reset my password?",faq
+"I want to return my order",ticket
+"Hello",greeting
+"What is the delivery time for products?",faq
+"I need to speak with a representative",ticket
+"Hey there",greeting
+"How can I track my shipment?",faq
+"I received a wrong item",ticket
+"Hi",greeting
+"Can I change my delivery address?",faq
+"I want to cancel my order",ticket
+"Good morning",greeting
+"Do you offer international shipping?",faq
+"The item I received is damaged",ticket
+"What payment methods are accepted?",faq
+"Is there a warranty on this product?",faq
+"My product hasn't arrived yet",ticket
+"Hey",greeting
+"How do I apply a discount code?",faq
+"I was charged twice",ticket
+"Where is my order?",faq
+"Can someone assist me?",ticket
+"Greetings",greeting
+"What is your refund policy?",faq
+"How do I update my email address?",faq
+"I need help with my purchase",ticket
+"Yo",greeting
+"I want to make a complaint",ticket
+"What is your return policy?",faq
+"I can't log in to my account",ticket 
