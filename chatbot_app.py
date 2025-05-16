@@ -8,6 +8,7 @@ from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
 import csv
 import re
+import subprocess
 
 # Set page config
 st.set_page_config(
@@ -86,28 +87,10 @@ st.markdown("""
         font-size: 1rem;
     }
     /* Feedback buttons */
-    .feedback-buttons {
+    .feedback-container {
         display: flex;
         gap: 10px;
         margin-top: 5px;
-    }
-    .feedback-button {
-        background-color: transparent;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
-        padding: 5px 10px;
-        font-size: 12px;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    .feedback-button:hover {
-        background-color: #4d5371;
-    }
-    .feedback-thumbs-up {
-        color: #4CAF50;
-    }
-    .feedback-thumbs-down {
-        color: #F44336;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -121,6 +104,9 @@ if 'feedback_given' not in st.session_state:
     
 if 'learning_data' not in st.session_state:
     st.session_state.learning_data = []
+    
+if 'feedback_processed' not in st.session_state:
+    st.session_state.feedback_processed = set()
 
 def get_confidence_class(confidence):
     """Get CSS class based on confidence level."""
@@ -359,46 +345,19 @@ def format_meta_info(response_data):
             </div>
         """
 
-def render_feedback_buttons(message_idx):
-    """Render thumbs up/down buttons for feedback."""
-    return f"""
-    <div class="feedback-buttons">
-        <button class="feedback-button feedback-thumbs-up" onclick="sendFeedback('{message_idx}', 'positive')">👍 Helpful</button>
-        <button class="feedback-button feedback-thumbs-down" onclick="sendFeedback('{message_idx}', 'negative')">👎 Not Helpful</button>
-    </div>
-    <script>
-    function sendFeedback(msgIdx, type) {{
-        const data = {{messageIdx: msgIdx, feedbackType: type}};
-        window.parent.postMessage({{
-            type: 'streamlit:feedback',
-            feedback: data
-        }}, '*');
-        
-        // Update UI
-        const buttons = document.querySelectorAll('.feedback-buttons');
-        buttons.forEach(btn => {{
-            btn.innerHTML = '<span style="color: #a0a0a0;">Thank you for your feedback!</span>';
-        }});
-    }}
-    </script>
-    """
-
-def record_feedback(feedback_data):
-    """Handle user feedback and potentially add to training data."""
+def process_feedback(message_idx, feedback_type):
+    """Process user feedback and update the model if needed."""
     try:
-        # Placeholder - In a real system, this would update a database
-        print(f"Received feedback: {feedback_data}")
-        
-        message_idx = int(feedback_data['messageIdx'])
-        feedback_type = feedback_data['feedbackType']
-        
         # Get the message
         message = st.session_state.messages[message_idx]
         
         if feedback_type == 'negative' and message['role'] == 'assistant':
-            # This would be where we'd ask the user for a correction
-            # For now just mark the feedback as received
+            # Mark the feedback as received
             st.session_state.feedback_given[message_idx] = feedback_type
+            
+            # Ask for correction
+            st.info("Please provide a correction by typing: 'Correct: [wrong text] to [right text]'")
+            
         elif feedback_type == 'positive' and message['role'] == 'assistant':
             # If the confidence was low but user found it helpful, add to training data
             if message.get('meta', {}).get('is_low_confidence', False):
@@ -414,8 +373,14 @@ def record_feedback(feedback_data):
                         break
             
             st.session_state.feedback_given[message_idx] = feedback_type
+            
+        # Mark this feedback as processed
+        st.session_state.feedback_processed.add(message_idx)
+        
+        return True
     except Exception as e:
-        print(f"Error processing feedback: {e}")
+        st.error(f"Error processing feedback: {e}")
+        return False
 
 def handle_corrections(user_input, resources):
     """Process user corrections to improve the system."""
@@ -458,6 +423,35 @@ def handle_corrections(user_input, resources):
     # Not a correction, just process normally
     return get_response(user_input, resources)
 
+def retrain_model():
+    """Retrain the model with the latest data."""
+    try:
+        with st.spinner("Retraining model with latest data..."):
+            # Run the model training script
+            result = subprocess.run(["python", "model_training.py"], 
+                                   capture_output=True, 
+                                   text=True)
+            
+            if result.returncode == 0:
+                # Show training output in expander
+                with st.expander("Training Output", expanded=True):
+                    st.code(result.stdout)
+                
+                # Reload resources after retraining
+                new_resources = load_resources()
+                if new_resources:
+                    st.success("✅ Model retraining complete! New model loaded successfully.")
+                    return new_resources
+                else:
+                    st.error("❌ Failed to load new model after retraining")
+                    return None
+            else:
+                st.error(f"❌ Retraining failed: {result.stderr}")
+                return None
+    except Exception as e:
+        st.error(f"❌ Error during retraining: {str(e)}")
+        return None
+
 def main():
     st.title("🤖 Self-Learning Intelligent Customer Support Chatbot")
     
@@ -473,12 +467,12 @@ def main():
             st.success(f"✅ System running in {resources['mode']} mode")
             
             # Button to retrain the model
-            if st.button("Retrain Model"):
-                with st.spinner("Retraining model with latest data..."):
-                    st.info("This would execute model_training.py in a full implementation")
-                    # In a real implementation:
-                    # os.system("python model_training.py")
-                    st.success("Model retraining complete!")
+            if st.button("🔄 Retrain Model"):
+                new_resources = retrain_model()
+                if new_resources:
+                    resources = new_resources
+                    # Force a rerun to update the UI
+                    st.rerun()
         else:
             st.error("❌ Failed to load resources")
             
@@ -487,22 +481,24 @@ def main():
         try:
             df = pd.read_csv('customer_queries.csv')
             st.write(f"Total training examples: {len(df)}")
-            st.write(f"Intent distribution:")
-            st.write(df['intent'].value_counts())
+            st.write(f"Number of unique intents: {df['intent'].nunique()}")
+            st.write("Intent distribution:")
+            st.dataframe(df['intent'].value_counts().reset_index().rename(columns={'index': 'Intent', 'intent': 'Count'}))
             
             # Show recently learned items
             if st.session_state.learning_data:
                 st.write("Recently learned items:")
                 for item in st.session_state.learning_data[-3:]:  # Show last 3 items
                     st.write(f"- [{item['intent']}] {item['query'][:30]}...")
-        except:
-            st.write("No dataset stats available")
+        except Exception as e:
+            st.write(f"No dataset stats available: {str(e)}")
             
         # Instructions for using the chatbot
         st.header("How to use the chatbot")
         st.write("• Ask any customer service question")
         st.write("• Provide feedback using the thumbs up/down")
         st.write("• Correct responses by typing: 'Correct: [wrong text] to [right text]'")
+        st.write("• Click 'Retrain Model' after providing feedback to update the model")
     
     # Main chat interface
     for i, message in enumerate(st.session_state.messages):
@@ -513,7 +509,19 @@ def main():
                 
                 # Only show feedback buttons for bot messages without feedback
                 if message["role"] == "assistant" and i not in st.session_state.feedback_given:
-                    st.markdown(render_feedback_buttons(i), unsafe_allow_html=True)
+                    # Create a unique key for each feedback button
+                    feedback_key = f"feedback_{i}"
+                    
+                    # Create columns for feedback buttons
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("👍 Helpful", key=f"helpful_{i}"):
+                            process_feedback(i, "positive")
+                            st.rerun()  # Refresh UI to update state
+                    with col2:
+                        if st.button("👎 Not Helpful", key=f"not_helpful_{i}"):
+                            process_feedback(i, "negative")
+                            st.rerun()  # Refresh UI to update state
     
     # Chat input
     if prompt := st.chat_input("What would you like to know?"):
@@ -541,7 +549,16 @@ def main():
                 
                 # Only show feedback buttons for regular responses
                 if not response_data.get('is_correction'):
-                    st.markdown(render_feedback_buttons(len(st.session_state.messages) - 1), unsafe_allow_html=True)
+                    # Create columns for feedback buttons
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("👍 Helpful", key=f"helpful_new"):
+                            process_feedback(len(st.session_state.messages) - 1, "positive")
+                            st.rerun()  # Refresh UI to update state
+                    with col2:
+                        if st.button("👎 Not Helpful", key=f"not_helpful_new"):
+                            process_feedback(len(st.session_state.messages) - 1, "negative")
+                            st.rerun()  # Refresh UI to update state
         else:
             st.error("Chatbot is not properly initialized. Please check the debug information in the sidebar.")
 
